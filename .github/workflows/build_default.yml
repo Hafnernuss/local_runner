@@ -1,0 +1,70 @@
+name: Build Backend Docker
+
+on:
+  pull_request:
+    branches: [ develop, master ]
+  workflow_call:
+    inputs:
+      tags:
+        required: true
+        type: string
+        description: 'target-tag (do NOT use "latest")'
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: 'target-tag (do NOT use "latest")'
+        required: true
+        type: string
+
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-docker:
+    name: Build docker container
+    runs-on: ubuntu-latest
+    steps:
+      -
+        uses: actions/checkout@v4.1.1
+        with:
+          lfs: true
+      - run: git lfs pull
+      -
+        name: Build metadata
+        id: meta
+        uses: docker/metadata-action@v5.5.1
+        with:
+          images: ghcr.io/hafnernuss/local_runner
+          tags: |
+            type=ref,event=pr,prefix=pr
+            type=raw,value=${{ inputs.tags }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
+            type=raw,enable=${{ github.event_name == 'workflow_dispatch' }},value=${{ github.event.inputs.tags }}
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.0.0
+      -
+        name: Login to GitHub Container Registry
+        uses: docker/login-action@v3.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      -
+        name: Push
+        uses: docker/build-push-action@v5.1.0
+        with:
+          context: .
+          file: default/dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_TYPE=${{
+              github.event_name == 'workflow_dispatch' && (github.event.inputs.build_type || 'prod') ||
+              github.event_name == 'pull_request' && 'dev' ||
+              github.event_name == 'push' && 'prod'
+            }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
